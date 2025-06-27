@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Payment Summary App</title>
+  <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 24px; font-weight: bold; margin-bottom: 16px; }
+    h2 { font-size: 20px; font-weight: 600; margin-bottom: 12px; }
+    .mb-4 { margin-bottom: 16px; }
+    label { display: block; font-size: 14px; font-weight: 500; color: #374151; margin-bottom: 8px; }
+    input[type="file"] { font-size: 14px; color: #6b7280; }
+    .select2-container { width: 100% !important; }
+    .select2-selection--multiple { min-height: 38px; border: 1px solid #d1d5db; border-radius: 4px; }
+    .select2-selection__rendered { line-height: 34px; }
+    .select2-selection__choice { background-color: #3b82f6; color: #fff; }
+    .text-blue-500 { color: #3b82f6; }
+    .text-red-500 { color: #ef4444; }
+    table { width: 100%; border-collapse: collapse; background-color: #fff; }
+    th, td { padding: 8px 12px; border-bottom: 1px solid #d1d5db; text-align: left; }
+    th { font-weight: 600; }
+    .button { padding: 8px 16px; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; }
+    .button-blue { background-color: #3b82f6; }
+    .button-blue:hover { background-color: #2563eb; }
+    .button-green { background-color: #10b981; }
+    .button-green:hover { background-color: #059669; }
+    .flex { display: flex; gap: 16px; }
+    .overflow-x-auto { overflow-x: auto; }
+    .error-list { list-style: disc; margin-left: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Payment Summary Report Generator</h1>
+
+    <div class="mb-4">
+      <label>Upload CSV Files</label>
+      <input type="file" id="fileInput" multiple accept=".csv">
+    </div>
+
+    <div class="mb-4" id="channelSelectContainer" style="display: none;">
+      <label>Select Channels (Search and select multiple)</label>
+      <select id="channelSelect" multiple></select>
+    </div>
+
+    <div id="loading" class="text-blue-500" style="display: none;">Processing...</div>
+    <div id="error" class="text-red-500" style="display: none;"></div>
+    <div id="failedFiles" class="text-red-500" style="display: none;">
+      <p>Some files could not be processed:</p>
+      <ul id="failedFilesList" class="error-list"></ul>
+    </div>
+
+    <div id="reportContainer" style="display: none;">
+      <h2 id="reportTitle"></h2>
+      <div class="overflow-x-auto">
+        <table id="reportTable">
+          <thead>
+            <tr id="reportHeaders"></tr>
+          </thead>
+          <tbody id="reportBody"></tbody>
+        </table>
+      </div>
+      <div class="flex mb-4">
+        <a href="#" id="downloadCsv" class="button button-blue">Download CSV</a>
+        <a href="#" id="downloadExcel" class="button button-green">Download Excel</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Select2 JS -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+  <script>
+    let uploadedFiles = [];
+
+    $(document).ready(function () {
+      $('#channelSelect').select2({
+        placeholder: 'Search and select channels',
+        allowClear: true,
+        closeOnSelect: false
+      });
+
+      $('#channelSelect').on('change', async function () {
+        const selectedChannels = $(this).val() || [];
+        if (selectedChannels.length === 0 || uploadedFiles.length === 0) {
+          document.getElementById('error').textContent = 'Please select at least one channel';
+          document.getElementById('error').style.display = 'block';
+          return;
+        }
+
+        document.getElementById('loading').style.display = 'block';
+        document.getElementById('error').style.display = 'none';
+        document.getElementById('failedFiles').style.display = 'none';
+        document.getElementById('reportContainer').style.display = 'none';
+
+        try {
+          const response = await fetch('/generate_report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channels: selectedChannels, files: uploadedFiles })
+          });
+          const result = await response.json();
+
+          if (result.status === 'success') {
+            const report = result.report;
+            const columns = result.columns;
+
+            document.getElementById('reportTitle').textContent = `Report for Channels: ${selectedChannels.join(', ')}`;
+            const headersRow = document.getElementById('reportHeaders');
+            headersRow.innerHTML = '';
+            columns.forEach(col => {
+              const th = document.createElement('th');
+              th.textContent = col;
+              headersRow.appendChild(th);
+            });
+
+            const reportBody = document.getElementById('reportBody');
+            reportBody.innerHTML = '';
+            report.forEach(row => {
+              const tr = document.createElement('tr');
+              columns.forEach(col => {
+                const td = document.createElement('td');
+                td.textContent = row[col];
+                tr.appendChild(td);
+              });
+              reportBody.appendChild(tr);
+            });
+
+            document.getElementById('reportContainer').style.display = 'block';
+
+            document.getElementById('downloadCsv').onclick = () => downloadFile('csv', report, columns, selectedChannels);
+            document.getElementById('downloadExcel').onclick = () => downloadFile('excel', report, columns, selectedChannels);
+
+            if (result.failed_files && result.failed_files.length > 0) {
+              const failedFilesList = document.getElementById('failedFilesList');
+              failedFilesList.innerHTML = '';
+              result.failed_files.forEach(file => {
+                const li = document.createElement('li');
+                li.textContent = `${file.filename}: ${file.error}`;
+                failedFilesList.appendChild(li);
+              });
+              document.getElementById('failedFiles').style.display = 'block';
+            }
+          } else {
+            document.getElementById('error').textContent = result.message || 'No data found for selected channels';
+            document.getElementById('error').style.display = 'block';
+          }
+        } catch (err) {
+          document.getElementById('error').textContent = `Error generating report: ${err.message}`;
+          document.getElementById('error').style.display = 'block';
+        } finally {
+          document.getElementById('loading').style.display = 'none';
+        }
+      });
+    });
+
+    document.getElementById('fileInput').addEventListener('change', async () => {
+      const files = document.getElementById('fileInput').files;
+      if (files.length === 0) {
+        document.getElementById('error').textContent = 'No files selected';
+        document.getElementById('error').style.display = 'block';
+        return;
+      }
+
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('failedFiles').style.display = 'none';
+      document.getElementById('reportContainer').style.display = 'none';
+      document.getElementById('channelSelectContainer').style.display = 'none';
+
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append('files', file);
+      }
+
+      try {
+        const response = await fetch('/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const result = await response.json();
+
+        if (result.status === 'success' || result.status === 'partial_success') {
+          uploadedFiles = result.files;
+          const channelSelect = $('#channelSelect');
+          channelSelect.empty();
+
+          if (result.channels.length > 0) {
+            result.channels.forEach(channel => {
+              channelSelect.append(new Option(channel, channel));
+            });
+            document.getElementById('channelSelectContainer').style.display = 'block';
+            channelSelect.select2({ placeholder: 'Search and select channels', allowClear: true });
+          } else {
+            document.getElementById('error').textContent = result.message || 'No valid channels found.';
+            document.getElementById('error').style.display = 'block';
+          }
+
+          if (result.failed_files && result.failed_files.length > 0) {
+            const failedFilesList = document.getElementById('failedFilesList');
+            failedFilesList.innerHTML = '';
+            result.failed_files.forEach(file => {
+              const li = document.createElement('li');
+              li.textContent = `${file.filename}: ${file.error}`;
+              failedFilesList.appendChild(li);
+            });
+            document.getElementById('failedFiles').style.display = 'block';
+          }
+        } else {
+          document.getElementById('error').textContent = result.message || 'Error processing files';
+          document.getElementById('error').style.display = 'block';
+        }
+      } catch (err) {
+        document.getElementById('error').textContent = 'Upload error: ' + err.message;
+        document.getElementById('error').style.display = 'block';
+      } finally {
+        document.getElementById('loading').style.display = 'none';
+      }
+    });
+
+    async function downloadFile(fileType, report, columns, channels) {
+      try {
+        const response = await fetch(`/download/${fileType}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ report, columns, channels })
+        });
+
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `payment_summary_${channels.join('_')}.${fileType}`;
+          a.click();
+          URL.revokeObjectURL(url);
+
+          // Clean up uploaded files
+          await fetch('/cleanup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: uploadedFiles })
+          });
+
+          uploadedFiles = [];
+          document.getElementById('fileInput').value = '';
+          document.getElementById('channelSelectContainer').style.display = 'none';
+          document.getElementById('reportContainer').style.display = 'none';
+          document.getElementById('failedFiles').style.display = 'none';
+          $('#channelSelect').empty().select2({ placeholder: 'Search and select channels', allowClear: true });
+        } else {
+          const result = await response.json();
+          document.getElementById('error').textContent = result.message;
+          document.getElementById('error').style.display = 'block';
+        }
+      } catch (err) {
+        document.getElementById('error').textContent = 'Download error: ' + err.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+  </script>
+</body>
+</html>
